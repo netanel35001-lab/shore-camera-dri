@@ -25,3 +25,22 @@ ais:
   length_max_m: 450
 
 metric_crs: EPSG:25832            # ETRS89 / UTM 32N, metric CRS for Denmark
+
+camera:
+  name: Semco Maritime office building, west end of the port of Esbjerg
+  # Chosen because it sits at the western edge of the port, close to the water,
+  # and overlooks the Graadyb approach channel from a sufficient height.
+  lat: 55.480110
+  lon: 8.409856
+  height_asl_m: 30               # ASSUMPTION: mast on the roof, metres above sea level
+
+terrain:
+  dem_dir: data/raw/dem          # Copernicus GLO-30 DSM tiles (.tif)
+  # Missing tiles (open sea) and no-data cells are treated as sea level (0 m).
+  refraction_k: 0.13             # standard atmospheric refraction coefficient
+  azimuth_step_deg: 0.2          # angular resolution of the horizon table
+  range_step_m: 30               # sampling step along each ray (~DEM resolution)
+  max_range_m: 35000             # covers the whole study area from the camera
+  skip_near_m: 60                # ignore cells next to the camera (its own building)
+  sea_threshold_m: 1.0           # DSM cells below this are sea surface (removes water noise)
+  processed_dir: data/processed
