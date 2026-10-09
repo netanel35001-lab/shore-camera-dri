@@ -73,3 +73,10 @@ dri:
   daylight_sun_elev_deg: -6
   # Points slower than this are treated as moored/anchored and reported apart.
   moving_min_sog_kn: 1.0
+  # ...and must really have moved over the last moving_window_s seconds
+  # (filters moored Class B transponders that report noisy speeds).
+  moving_window_s: 300
+  moving_min_disp_m: 100
+  # Transits with at least this share of positions on DSM land are land
+  # transponders (e.g. a boat on a trailer) and are excluded.
+  land_transit_share: 0.8

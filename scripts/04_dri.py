@@ -102,17 +102,40 @@ def main():
         ts = ts.dt.tz_localize("UTC")
     pts["sun_elev_deg"] = sun_elevation_deg(ts, cfg["camera"]["lat"], cfg["camera"]["lon"])
     pts["daylight"] = pts["sun_elev_deg"] > thr["daylight_sun_elev_deg"]
-    pts["moving"] = pts["sog_kn"].fillna(0) >= thr["moving_min_sog_kn"]
-
     # Consistency check: AIS positions on DSM land cells.
     dems = s3.load_dems(cfg["terrain"]["dem_dir"])
     z = s3.sample_elevation(dems, pts["lon"].to_numpy(), pts["lat"].to_numpy(),
                             cfg["terrain"]["sea_threshold_m"])
-    on_land = z > 0
+    pts["on_land"] = z > 0
     near = pts["dist_m"] < 2000
-    print(f"\nConsistency check - AIS positions on DSM land cells: {on_land.mean():.2%}"
+    print(f"\nConsistency check - AIS positions on DSM land cells: {pts['on_land'].mean():.2%}"
           f"  (within 2 km of the camera, i.e. quays/port basin: "
-          f"{(on_land & near).sum() / max(on_land.sum(), 1):.0%} of them)")
+          f"{(pts['on_land'] & near).sum() / max(pts['on_land'].sum(), 1):.0%} of them)")
+
+    # Land transponders: transits that mostly sit on land are not vessels at sea
+    # (e.g. a boat on a trailer driving through town). Excluded from the results.
+    land_share = pts.groupby("transit_id")["on_land"].mean()
+    land_tr = land_share[land_share >= thr["land_transit_share"]].index
+    pts["land_transponder"] = pts["transit_id"].isin(land_tr)
+
+    # Moving = reported speed above the threshold AND real displacement over the
+    # last few minutes. Moored Class B transponders report noisy 1-2 kn speeds
+    # while staying put; the displacement test filters them out.
+    # Seconds since epoch, independent of pandas' internal time unit.
+    t = pd.to_datetime(pts["ts"]).to_numpy().astype("datetime64[s]").astype("int64")
+    mmsi = pts["mmsi"].to_numpy().astype("int64")
+    key = mmsi * 10**10 + t                       # rows are sorted by mmsi, ts
+    i0 = np.searchsorted(key, key - thr["moving_window_s"], side="left")
+    same = mmsi[i0] == mmsi
+    dt = np.where(same, t - t[i0], 0)
+    disp = np.hypot(x - x[i0], y - y[i0])
+    has_window = same & (dt >= thr["moving_window_s"] / 2)
+    really_moves = np.where(has_window, disp >= thr["moving_min_disp_m"], True)
+    fast = pts["sog_kn"].fillna(0).to_numpy() >= thr["moving_min_sog_kn"]
+    pts["moving"] = fast & really_moves & ~pts["land_transponder"].to_numpy()
+    print(f"Filtered as moored speed jitter: {(fast & ~really_moves).sum():,} positions; "
+          f"land transponders: {len(land_tr)} transit(s), "
+          f"{pts['land_transponder'].sum():,} positions")
 
     # DRI per sensor and height variant.
     variants = {"central": "height_m", "low": "height_low_m", "high": "height_high_m"}
@@ -132,7 +155,8 @@ def main():
 
     sensor_names = [s["name"] for s in sensors] + ["BEST"]
     keep = ["ts", "mmsi", "transit_id", "lat", "lon", "sog_kn", "vessel_class", "length_m",
-            "height_m", "dist_m", "hidden_m", "daylight", "moving"] + \
+            "height_m", "dist_m", "hidden_m", "daylight", "moving", "on_land",
+            "land_transponder"] + \
            [f"{n}_central" for n in sensor_names] + [f"{s['name']}_px" for s in sensors]
     pts[keep].to_parquet(os.path.join(out, "dri_points.parquet"), index=False)
 
