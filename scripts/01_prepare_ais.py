@@ -16,6 +16,7 @@ Usage:
 import argparse
 import glob
 import os
+import shutil
 import sys
 import zipfile
 
@@ -62,21 +63,76 @@ def load_config(path):
         return yaml.safe_load(f)
 
 
-def collect_csv_files(raw_dir, extract_dir):
-    """Return a list of CSV paths; DMA zips are extracted to extract_dir first."""
+def extract_zip(zpath, extract_dir):
+    """Extract the CSV(s) of one DMA zip and return their paths.
+
+    DMA daily zips hold one ~4-5 GB CSV each. Extraction streams in chunks
+    (shutil.copyfileobj) so memory use stays small.
+    """
     os.makedirs(extract_dir, exist_ok=True)
-    for zpath in glob.glob(os.path.join(raw_dir, "*.zip")):
-        with zipfile.ZipFile(zpath) as zf:
-            for member in zf.namelist():
-                if member.lower().endswith(".csv"):
-                    target = os.path.join(extract_dir, os.path.basename(member))
-                    if not os.path.exists(target):
-                        with zf.open(member) as src, open(target, "wb") as dst:
-                            dst.write(src.read())
-    files = glob.glob(os.path.join(raw_dir, "*.csv")) + glob.glob(
-        os.path.join(extract_dir, "*.csv")
-    )
-    return sorted(set(files))
+    out = []
+    with zipfile.ZipFile(zpath) as zf:
+        for member in zf.namelist():
+            if member.lower().endswith(".csv"):
+                target = os.path.join(extract_dir, os.path.basename(member))
+                if not os.path.exists(target):
+                    with zf.open(member) as src, open(target, "wb") as dst:
+                        shutil.copyfileobj(src, dst, length=16 * 1024 * 1024)
+                out.append(target)
+    return out
+
+
+def clip_csv(con, csv_path, area, ais, first):
+    """Stream one raw CSV, keep study-area ship reports, append them to `pts`.
+
+    The file is read as a VIEW, so the bounding-box filter is applied while
+    streaming and only study-area rows ever reach memory.
+    DMA headers start with '# Timestamp'; normalize_names turns every header
+    into snake_case so we do not depend on exact spelling.
+    """
+    con.execute(f"""
+        CREATE OR REPLACE VIEW raw AS
+        SELECT * FROM read_csv('{csv_path}',
+            header = true, normalize_names = true, all_varchar = true,
+            ignore_errors = true)
+    """)
+    cols = [r[0] for r in con.execute("DESCRIBE raw").fetchall()]
+
+    def col(base):
+        """Find a column by base name; DuckDB prefixes reserved words with '_'."""
+        for c in cols:
+            if c.strip("_") == base:
+                return c
+        sys.exit(f"Column '{base}' not found in {csv_path}. Columns: {cols}")
+
+    ts_col = next(c for c in cols if "timestamp" in c)
+    c_mmsi, c_lat, c_lon = col("mmsi"), col("latitude"), col("longitude")
+    c_sog, c_cog, c_mob = col("sog"), col("cog"), col("type_of_mobile")
+    c_name, c_type = col("name"), col("ship_type")
+    c_len, c_wid = col("length"), col("width")
+    mobile_list = ", ".join(f"'{m}'" for m in ais["mobile_types"])
+
+    select = f"""
+        SELECT
+            coalesce(try_strptime(raw.{ts_col}, '%d/%m/%Y %H:%M:%S'),
+                     try_cast(raw.{ts_col} AS TIMESTAMP))    AS ts,
+            try_cast(raw.{c_mmsi} AS BIGINT)                  AS mmsi,
+            try_cast(raw.{c_lat} AS DOUBLE)                   AS lat,
+            try_cast(raw.{c_lon} AS DOUBLE)                   AS lon,
+            try_cast(raw.{c_sog} AS DOUBLE)                   AS sog_kn,
+            try_cast(raw.{c_cog} AS DOUBLE)                   AS cog_deg,
+            raw.{c_mob}                                       AS mobile_type,
+            nullif(trim(raw.{c_name}), '')                    AS name,
+            nullif(trim(raw.{c_type}), '')                    AS ship_type_raw,
+            try_cast(raw.{c_len} AS DOUBLE)                   AS length_m,
+            try_cast(raw.{c_wid} AS DOUBLE)                   AS width_m
+        FROM raw
+        WHERE raw.{c_mob} IN ({mobile_list})
+          AND try_cast(raw.{c_lat} AS DOUBLE) BETWEEN {area['lat_min']} AND {area['lat_max']}
+          AND try_cast(raw.{c_lon} AS DOUBLE) BETWEEN {area['lon_min']} AND {area['lon_max']}
+    """
+    con.execute(("CREATE TABLE pts AS " if first else "INSERT INTO pts ") + select)
+    con.execute("DROP VIEW raw")
 
 
 def class_case_sql():
@@ -97,63 +153,35 @@ def main():
     cfg = load_config(args.config)
     area, ais = cfg["study_area"], cfg["ais"]
 
-    files = collect_csv_files(ais["raw_dir"], os.path.join(ais["raw_dir"], "_extracted"))
-    if not files:
-        sys.exit(f"No AIS files found in {ais['raw_dir']}. Download DMA daily files first.")
-    print(f"Found {len(files)} AIS file(s).")
+    raw_dir = ais["raw_dir"]
+    extract_dir = os.path.join(raw_dir, "_extracted")
+    sources = sorted(glob.glob(os.path.join(raw_dir, "*.zip")) +
+                     glob.glob(os.path.join(raw_dir, "*.csv")))
+    if not sources:
+        sys.exit(f"No AIS files found in {raw_dir}. Download DMA daily files first.")
+    print(f"Found {len(sources)} AIS file(s).")
 
     os.makedirs(ais["processed_dir"], exist_ok=True)
-    con = duckdb.connect()
+    # Spill to disk instead of failing if memory runs short on a home PC.
+    tmp_dir = os.path.join(ais["processed_dir"], "_duckdb_tmp")
+    con = duckdb.connect(config={"temp_directory": tmp_dir})
 
-    # 1) Read raw files. DMA headers start with '# Timestamp'; normalize_names
-    #    turns every header into snake_case so we do not depend on exact spelling.
-    file_list = "[" + ", ".join(f"'{p}'" for p in files) + "]"
-    con.execute(f"""
-        CREATE TABLE raw AS
-        SELECT * FROM read_csv({file_list},
-            header = true, normalize_names = true, all_varchar = true,
-            union_by_name = true, ignore_errors = true)
-    """)
-    cols = [r[0] for r in con.execute("DESCRIBE raw").fetchall()]
-
-    def col(base):
-        """Find a column by base name; DuckDB prefixes reserved words with '_'."""
-        for c in cols:
-            if c.strip("_") == base:
-                return c
-        sys.exit(f"Column '{base}' not found in AIS files. Columns: {cols}")
-
-    ts_col = next(c for c in cols if "timestamp" in c)
-    c_mmsi, c_lat, c_lon = col("mmsi"), col("latitude"), col("longitude")
-    c_sog, c_cog, c_mob = col("sog"), col("cog"), col("type_of_mobile")
-    c_name, c_type = col("name"), col("ship_type")
-    c_len, c_wid = col("length"), col("width")
-    n_raw = con.execute("SELECT count(*) FROM raw").fetchone()[0]
-    print(f"Raw rows: {n_raw:,}")
-
-    # 2) Clip to study area, keep ship transponders, cast types.
-    mobile_list = ", ".join(f"'{m}'" for m in ais["mobile_types"])
-    con.execute(f"""
-        CREATE TABLE pts AS
-        SELECT
-            coalesce(try_strptime({ts_col}, '%d/%m/%Y %H:%M:%S'),
-                     try_cast({ts_col} AS TIMESTAMP))        AS ts,
-            try_cast(raw.{c_mmsi} AS BIGINT)                  AS mmsi,
-            try_cast(raw.{c_lat} AS DOUBLE)                   AS lat,
-            try_cast(raw.{c_lon} AS DOUBLE)                   AS lon,
-            try_cast(raw.{c_sog} AS DOUBLE)                   AS sog_kn,
-            try_cast(raw.{c_cog} AS DOUBLE)                   AS cog_deg,
-            raw.{c_mob}                                       AS mobile_type,
-            nullif(trim(raw.{c_name}), '')                    AS name,
-            nullif(trim(raw.{c_type}), '')                    AS ship_type_raw,
-            try_cast(raw.{c_len} AS DOUBLE)                   AS length_m,
-            try_cast(raw.{c_wid} AS DOUBLE)                   AS width_m
-        FROM raw
-        WHERE raw.{c_mob} IN ({mobile_list})
-          AND try_cast(raw.{c_lat} AS DOUBLE) BETWEEN {area['lat_min']} AND {area['lat_max']}
-          AND try_cast(raw.{c_lon} AS DOUBLE) BETWEEN {area['lon_min']} AND {area['lon_max']}
-    """)
-    con.execute("DROP TABLE raw")
+    # 1-2) One file at a time: extract -> clip -> delete the extracted CSV.
+    #      Peak disk use is one day's CSV (~4-5 GB), not the whole week.
+    for i, src in enumerate(sources):
+        name = os.path.basename(src)
+        print(f"[{i + 1}/{len(sources)}] {name}: ", end="", flush=True)
+        if src.lower().endswith(".zip"):
+            print("extracting ... ", end="", flush=True)
+            csvs = extract_zip(src, extract_dir)
+        else:
+            csvs = [src]
+        print("clipping ... ", end="", flush=True)
+        for c in csvs:
+            clip_csv(con, c, area, ais, first=(i == 0 and c == csvs[0]))
+            if src.lower().endswith(".zip") and ais.get("delete_extracted", True):
+                os.remove(c)
+        print("done", flush=True)
 
     # 3) Basic validity: ship MMSIs are 9 digits starting with 2-7 (MID range).
     con.execute("""
@@ -240,7 +268,7 @@ def main():
         FROM pts_tr
         GROUP BY mmsi
     """)
-    con.execute(f"ALTER TABLE vessels ADD COLUMN vessel_class VARCHAR")
+    con.execute("ALTER TABLE vessels ADD COLUMN vessel_class VARCHAR")
     con.execute(f"UPDATE vessels SET vessel_class = {class_case_sql()}")
     # Length source is kept per vessel so every number stays traceable:
     # reported -> class_median (same class in this data) -> class_default.
@@ -284,6 +312,9 @@ def main():
     print(f"  after position-jump filter       : {n_clean:,}")
     print("\nTransits by vessel class")
     print(con.execute(f"SELECT * FROM read_csv('{out}/transits_summary.csv')").df().to_string(index=False))
+
+    con.close()
+    shutil.rmtree(tmp_dir, ignore_errors=True)
 
 
 if __name__ == "__main__":

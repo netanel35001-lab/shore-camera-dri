@@ -12,6 +12,8 @@ study_area:
 ais:
   raw_dir: data/raw/ais          # put the downloaded DMA daily files here (.csv or .zip)
   processed_dir: data/processed
+  # Delete the multi-GB CSVs extracted from the zips once processing is done.
+  delete_extracted: true
   # Only these transponder classes are kept (drops base stations, AtoN, SAR aircraft).
   mobile_types: ["Class A", "Class B"]
   # Points implying a jump faster than this (knots) are treated as GPS/AIS errors.
