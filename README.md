@@ -120,7 +120,13 @@ the sea surface becomes geometrically visible again about 10 km out along 218°,
 band ~0.03° above the island — less than a pixel in a wide view. "Geometrically visible" and
 "visible in practice" differ; the pixels-on-target step is what closes that gap.
 
-![Hidden height: how tall a vessel must be to be seen](docs/images/hidden_height_map.png)
+<p align="center">
+  <img src="docs/images/hidden_height_map.png" width="620"
+       alt="Hidden height: how tall a vessel must be to be seen">
+</p>
+
+*Hidden height map. Yellow: the camera sees down to the waterline. Darker: the lower part of a
+vessel is hidden by Earth curvature or by land (the shadows of Fanø and Skallingen).*
 
 ## Data quality findings
 
