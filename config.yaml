@@ -44,3 +44,32 @@ terrain:
   skip_near_m: 60                # ignore cells next to the camera (its own building)
   sea_threshold_m: 1.0           # DSM cells below this are sea surface (removes water noise)
   processed_dir: data/processed
+
+  # Generic sensor configurations (typical components, not a specific product).
+sensors:
+  - name: EO_wide                # day camera, wide setting for continuous watch
+    band: eo
+    pixel_pitch_um: 2.9          # typical 1080p security-camera sensor
+    focal_mm: 25
+    width_px: 1920
+  - name: EO_zoom                # same camera zoomed in on one target
+    band: eo
+    pixel_pitch_um: 2.9
+    focal_mm: 100
+    width_px: 1920
+  - name: IR                     # uncooled thermal camera, ~same FOV as EO_wide
+    band: ir
+    pixel_pitch_um: 17
+    focal_mm: 50
+    width_px: 640
+
+dri:
+  # Johnson criteria: pixels across the critical dimension (vessel height).
+  detect_px: 2
+  recognize_px: 8
+  identify_px: 12.8
+  # EO cameras need daylight; sun elevation above this counts as day
+  # (-6 deg = end of civil twilight). IR works day and night.
+  daylight_sun_elev_deg: -6
+  # Points slower than this are treated as moored/anchored and reported apart.
+  moving_min_sog_kn: 1.0
