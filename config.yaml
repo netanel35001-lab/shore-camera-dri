@@ -45,7 +45,7 @@ terrain:
   sea_threshold_m: 1.0           # DSM cells below this are sea surface (removes water noise)
   processed_dir: data/processed
 
-  # Generic sensor configurations (typical components, not a specific product).
+# Generic sensor configurations (typical components, not a specific product).
 sensors:
   - name: EO_wide                # day camera, wide setting for continuous watch
     band: eo
@@ -80,3 +80,13 @@ dri:
   # Transits with at least this share of positions on DSM land are land
   # transponders (e.g. a boat on a trailer) and are excluded.
   land_transit_share: 0.8
+
+second_camera:
+  # Candidate sites are generated automatically along the coastline.
+  # Purely geometric: permits, power and access are NOT assessed.
+  mast_height_m: 25              # mast on top of the ground/structure at the site
+  candidate_spacing_m: 1500      # minimum distance between candidate sites
+  min_distance_from_camera_m: 3000
+  grid_step_m: 150               # coastline search grid
+  azimuth_step_deg: 0.5          # coarser than step 3, for speed (many sites)
+  range_step_m: 60
