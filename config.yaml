@@ -1,0 +1,25 @@
+# Shore Camera DRI - project configuration
+# All geographic values are WGS84 (EPSG:4326) unless stated otherwise.
+
+study_area:
+  name: Esbjerg approaches (Graadyb channel and outer anchorage)
+  # Bounding box around the port of Esbjerg and its western approach.
+  lon_min: 7.95
+  lon_max: 8.60
+  lat_min: 55.30
+  lat_max: 55.62
+
+ais:
+  raw_dir: data/raw/ais          # put the downloaded DMA daily files here (.csv or .zip)
+  processed_dir: data/processed
+  # Only these transponder classes are kept (drops base stations, AtoN, SAR aircraft).
+  mobile_types: ["Class A", "Class B"]
+  # Points implying a jump faster than this (knots) are treated as GPS/AIS errors.
+  max_implied_speed_kn: 50
+  # A new transit starts when a vessel is silent for longer than this (minutes).
+  transit_gap_min: 30
+  # Plausible hull length range (m); values outside are set to missing.
+  length_min_m: 2
+  length_max_m: 450
+
+metric_crs: EPSG:25832            # ETRS89 / UTM 32N, metric CRS for Denmark
