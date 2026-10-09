@@ -1,0 +1,10 @@
+vessel_class,height_ratio,h_min_m,h_max_m,rationale
+pleasure,0.25,1.5,6,"Motorboat hull + cabin. Sailing masts excluded: too thin to be the critical dimension."
+fishing,0.30,3,15,"Small hull with a tall wheelhouse relative to length."
+service,0.30,3,20,"Tugs, pilots, crew-transfer vessels: compact hull, high wheelhouse."
+high_speed_craft,0.20,3,15,"Low, long hulls built for speed."
+passenger,0.25,4,60,"Ferries; multi-deck superstructure. Cap ~ large cruise-ship air draft."
+cargo,0.20,6,60,"Hull + deck cargo + bridge. Cap ~ largest container-ship air draft."
+tanker,0.15,6,50,"Low freeboard when loaded; bridge aft is the highest point."
+other,0.25,2,50,"Mixed class (offshore-wind service vessels, survey ships, small craft)."
+unknown,0.20,2,50,"No reliable type; generic ratio."
